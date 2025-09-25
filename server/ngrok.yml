@@ -1,0 +1,11 @@
+# ngrok Configuration for Clipboard Sync Server
+
+authtoken: 338z0XdNpoCLGg9RssICHvRBdlI_81JkyZvmKoQgLeRbHuywS
+version: 2
+
+tunnels:
+  clipboard-sync:
+    proto: http
+    addr: 8765
+    schemes: [https, http]
+    inspect: false
