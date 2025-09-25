@@ -329,9 +329,11 @@ class ClipboardClientGUI:
                 if not self.is_hidden:
                     self.root.after(0, self.update_connected_ui)
                 
-                # Initialize clipboard
+                # Initialize clipboard with cleaned text
                 try:
-                    self.last_clipboard = pyperclip.paste()
+                    initial_clipboard = pyperclip.paste()
+                    # Clean and normalize the initial clipboard text  
+                    self.last_clipboard = initial_clipboard.encode('utf-8', errors='ignore').decode('utf-8')
                 except:
                     self.last_clipboard = ""
                 
@@ -372,107 +374,225 @@ class ClipboardClientGUI:
                 if not self.running:
                     break
                     
-                data = json.loads(message)
-                message_type = data.get("type")
-                
-                if message_type == "clipboard_sync":
-                    content_type = data.get("content_type", "text")
-                    clipboard_text = data.get("text", "")
-                    clipboard_image = data.get("image", "")
-                    from_user = data.get("from_user", "Unknown")
+                try:
+                    # Ensure proper UTF-8 handling for received messages
+                    if isinstance(message, bytes):
+                        message = message.decode('utf-8', errors='ignore')
                     
-                    if content_type == "image" and clipboard_image:
-                        if self.set_clipboard_image(clipboard_image):
-                            self.log_message(f"🖼️ Image received from {from_user}")
-                        else:
-                            self.log_message(f"❌ Failed to set image from {from_user}")
+                    data = json.loads(message)
+                    message_type = data.get("type")
                     
-                    elif content_type == "text" and clipboard_text:
-                        if clipboard_text != self.last_clipboard:
-                            pyperclip.copy(clipboard_text)
-                            self.last_clipboard = clipboard_text
-                            
-                            preview = clipboard_text[:50] + "..." if len(clipboard_text) > 50 else clipboard_text
-                            self.log_message(f"📋 Text from {from_user}: {preview}")
+                    if message_type == "clipboard_sync":
+                        content_type = data.get("content_type", "text")
+                        clipboard_text = data.get("text", "")
+                        clipboard_image = data.get("image", "")
+                        from_user = data.get("from_user", "Unknown")
+                        
+                        if content_type == "image" and clipboard_image:
+                            if self.set_clipboard_image(clipboard_image):
+                                self.log_message(f"🖼️ Image received from {from_user}")
+                            else:
+                                self.log_message(f"❌ Failed to set image from {from_user}")
+                        
+                        elif content_type == "text" and clipboard_text:
+                            # Clean received text to ensure proper encoding
+                            try:
+                                clean_text = clipboard_text.encode('utf-8', errors='ignore').decode('utf-8')
+                                
+                                if clean_text != self.last_clipboard:
+                                    pyperclip.copy(clean_text)
+                                    self.last_clipboard = clean_text
+                                    
+                                    preview = clean_text[:50] + "..." if len(clean_text) > 50 else clean_text
+                                    self.log_message(f"📋 Text from {from_user}: {preview}")
+                                    
+                            except UnicodeError as e:
+                                self.log_message(f"❌ Text encoding error on receive: {e}")
+                                
+                except json.JSONDecodeError as e:
+                    self.log_message(f"❌ JSON decode error: {e}")
+                except Exception as e:
+                    self.log_message(f"❌ Message processing error: {e}")
                             
         except websockets.exceptions.ConnectionClosed:
             self.log_message("🔌 Connection to server lost")
         except Exception as e:
-            self.log_message(f"Error listening for messages: {e}")
+            self.log_message(f"❌ Error listening for messages: {e}")
             
     def monitor_clipboard(self):
         """Monitor clipboard changes"""
+        last_image_hash = None
+        
         while self.running and self.is_connected:
             try:
-                current_clipboard = pyperclip.paste()
-                
-                if current_clipboard != self.last_clipboard and current_clipboard.strip():
-                    self.last_clipboard = current_clipboard
+                # Monitor text clipboard
+                try:
+                    current_clipboard = pyperclip.paste()
                     
-                    # Send text to server
-                    message = {
-                        "type": "clipboard_sync",
-                        "content_type": "text",
-                        "content": current_clipboard
-                    }
+                    # Clean and normalize current clipboard for consistent comparison  
+                    clean_current = current_clipboard.encode('utf-8', errors='ignore').decode('utf-8')
                     
-                    if self.websocket:
+                    if clean_current != self.last_clipboard and clean_current.strip():
+                        
+                        # Update last_clipboard with cleaned text  
+                        self.last_clipboard = clean_current
+                        
+                        # Send text to server using already cleaned text
                         try:
-                            asyncio.run_coroutine_threadsafe(
-                                self.websocket.send(json.dumps(message)),
-                                self.client_loop
-                            )
-                            preview = current_clipboard[:50] + "..." if len(current_clipboard) > 50 else current_clipboard
-                            self.log_message(f"📤 Sent text: {preview}")
-                        except:
-                            pass
+                            # Send text to server
+                            message = {
+                                "type": "clipboard_sync",
+                                "content_type": "text",
+                                "content": clean_current
+                            }
+                            
+                            if self.websocket:
+                                try:
+                                    # Ensure JSON is properly encoded
+                                    json_message = json.dumps(message, ensure_ascii=False)
+                                    
+                                    asyncio.run_coroutine_threadsafe(
+                                        self.websocket.send(json_message),
+                                        self.client_loop
+                                    )
+                                    preview = clean_current[:50] + "..." if len(clean_current) > 50 else clean_current
+                                    self.log_message(f"📤 Sent text: {preview}")
+                                except Exception as e:
+                                    self.log_message(f"❌ Error sending text: {e}")
+                                    
+                        except UnicodeError as e:
+                            self.log_message(f"❌ Text encoding error: {e}")
+                            
+                except Exception as e:
+                    self.log_message(f"❌ Error reading text clipboard: {e}")
                 
-                # Check for image in clipboard
-                image_data = self.get_clipboard_image()
-                if image_data:
-                    message = {
-                        "type": "clipboard_sync",
-                        "content_type": "image",
-                        "content": image_data
-                    }
-                    
-                    if self.websocket:
-                        try:
-                            asyncio.run_coroutine_threadsafe(
-                                self.websocket.send(json.dumps(message)),
-                                self.client_loop
-                            )
-                            self.log_message("📤 Sent image")
-                        except:
-                            pass
+                # Monitor image clipboard  
+                try:
+                    image_data = self.get_clipboard_image_silent()  # Silent version that doesn't log
+                    if image_data:
+                        # Create hash to avoid sending same image repeatedly
+                        import hashlib
+                        image_hash = hashlib.md5(image_data.encode()).hexdigest()
+                        
+                        if image_hash != last_image_hash:
+                            last_image_hash = image_hash
+                            
+                            # Only log when we have a NEW image
+                            self.log_message("📸 New image detected, sending to server")
+                            
+                            message = {
+                                "type": "clipboard_sync",
+                                "content_type": "image",
+                                "content": image_data
+                            }
+                            
+                            if self.websocket:
+                                try:
+                                    json_message = json.dumps(message, ensure_ascii=False)
+                                    asyncio.run_coroutine_threadsafe(
+                                        self.websocket.send(json_message),
+                                        self.client_loop
+                                    )
+                                    self.log_message("📤 Sent image")
+                                except Exception as e:
+                                    self.log_message(f"❌ Error sending image: {e}")
+                                    
+                except Exception as e:
+                    self.log_message(f"❌ Error reading image clipboard: {e}")
                 
                 time.sleep(0.5)  # Check every 500ms
                 
             except Exception as e:
-                self.log_message(f"Clipboard monitor error: {e}")
+                self.log_message(f"❌ Clipboard monitor error: {e}")
                 time.sleep(1)
                 
+    def get_clipboard_image_silent(self):
+        """Get image from clipboard without logging every capture"""
+        return self._get_clipboard_image_internal(log_capture=False)
+                
     def get_clipboard_image(self):
+        """Get image from clipboard with logging"""
+        return self._get_clipboard_image_internal(log_capture=True)
+        
+    def _get_clipboard_image_internal(self, log_capture=True):
         """Get image from clipboard"""
         try:
             win32clipboard.OpenClipboard()
             try:
+                # Check for different image formats
                 if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_DIB):
+                    # DIB format (most common for screenshots)
                     data = win32clipboard.GetClipboardData(win32clipboard.CF_DIB)
                     
-                    # Convert to PIL Image
-                    image = Image.open(io.BytesIO(data[40:]))  # Skip BMP header
+                    # DIB data starts with BITMAPINFOHEADER (40 bytes)
+                    # followed by color table (if present) and bitmap data
+                    if len(data) > 40:
+                        try:
+                            # Create PIL Image from DIB data
+                            # Skip the BITMAPINFOHEADER (40 bytes)
+                            image_data = data[40:]
+                            
+                            # Parse BITMAPINFOHEADER to get image dimensions
+                            import struct
+                            header = data[:40]
+                            width = struct.unpack('<L', header[4:8])[0]
+                            height = abs(struct.unpack('<l', header[8:12])[0])  # Height can be negative
+                            bit_count = struct.unpack('<H', header[14:16])[0]
+                            
+                            # Calculate expected data size
+                            bytes_per_line = ((width * bit_count + 31) // 32) * 4  # 32-bit aligned
+                            expected_size = bytes_per_line * height
+                            
+                            # Validate data size
+                            if len(image_data) < expected_size:
+                                self.log_message(f"⚠️ Image data too small: {len(image_data)} < {expected_size}")
+                                return None
+                            
+                            # Create a temporary BMP file in memory
+                            bmp_header = b'BM'  # BMP signature
+                            file_size = 14 + len(data)  # File header + DIB data
+                            bmp_header += struct.pack('<L', file_size)  # File size
+                            bmp_header += b'\x00\x00\x00\x00'  # Reserved
+                            bmp_header += struct.pack('<L', 14 + 40)  # Offset to pixel data
+                            
+                            # Combine BMP header with DIB data
+                            bmp_data = bmp_header + data
+                            
+                            # Open with PIL
+                            image = Image.open(io.BytesIO(bmp_data))
+                            
+                            # Convert to PNG and encode as base64
+                            buffer = io.BytesIO()
+                            image.save(buffer, format='PNG')
+                            image_b64 = base64.b64encode(buffer.getvalue()).decode()
+                            
+                            if log_capture:
+                                self.log_message(f"📸 Captured image: {width}x{height}, {bit_count}-bit")
+                            return image_b64
+                            
+                        except Exception as e:
+                            if log_capture:
+                                self.log_message(f"❌ Error processing DIB image: {e}")
+                            return None
+                            
+                elif win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_BITMAP):
+                    # Handle CF_BITMAP format
+                    if log_capture:
+                        self.log_message("⚠️ CF_BITMAP format not fully supported, trying alternative method")
+                    return None
                     
-                    # Convert to base64
-                    buffer = io.BytesIO()
-                    image.save(buffer, format='PNG')
-                    image_data = base64.b64encode(buffer.getvalue()).decode()
+                else:
+                    # No image format available
+                    return None
                     
-                    return image_data
             finally:
                 win32clipboard.CloseClipboard()
-        except:
-            pass
+                
+        except Exception as e:
+            if log_capture:
+                self.log_message(f"❌ Error accessing clipboard for image: {e}")
+            return None
+            
         return None
         
     def set_clipboard_image(self, image_data):
@@ -482,21 +602,41 @@ class ClipboardClientGUI:
             image_bytes = base64.b64decode(image_data)
             image = Image.open(io.BytesIO(image_bytes))
             
-            # Convert to BMP format for clipboard
-            output = io.BytesIO()
-            image.save(output, 'BMP')
-            data = output.getvalue()[14:]  # Remove BMP file header
+            self.log_message(f"📥 Setting image to clipboard: {image.size[0]}x{image.size[1]}")
+            
+            # Convert to RGB if necessary (remove alpha channel)
+            if image.mode in ('RGBA', 'LA'):
+                # Create white background
+                background = Image.new('RGB', image.size, (255, 255, 255))
+                if image.mode == 'RGBA':
+                    background.paste(image, mask=image.split()[-1])  # Use alpha channel as mask
+                else:
+                    background.paste(image)
+                image = background
+            elif image.mode != 'RGB':
+                image = image.convert('RGB')
+            
+            # Convert to DIB format for clipboard
+            # Create BMP in memory first
+            bmp_buffer = io.BytesIO()
+            image.save(bmp_buffer, format='BMP')
+            bmp_data = bmp_buffer.getvalue()
+            
+            # Extract DIB data (skip BMP file header - first 14 bytes)
+            dib_data = bmp_data[14:]
             
             win32clipboard.OpenClipboard()
             try:
                 win32clipboard.EmptyClipboard()
-                win32clipboard.SetClipboardData(win32clipboard.CF_DIB, data)
+                win32clipboard.SetClipboardData(win32clipboard.CF_DIB, dib_data)
+                self.log_message("✅ Image set to clipboard successfully")
             finally:
                 win32clipboard.CloseClipboard()
                 
             return True
+            
         except Exception as e:
-            self.log_message(f"Error setting clipboard image: {e}")
+            self.log_message(f"❌ Error setting clipboard image: {e}")
             return False
             
     def hide_to_tray(self):

@@ -115,33 +115,41 @@ class SimpleClipboardServer:
         
         try:
             auth_message = await asyncio.wait_for(websocket.recv(), timeout=30.0)
+            
+            # Handle UTF-8 encoding for auth message
+            if isinstance(auth_message, bytes):
+                auth_message = auth_message.decode('utf-8', errors='ignore')
+                
             auth_data = json.loads(auth_message)
             
             if auth_data.get("type") != "auth":
                 await websocket.send(json.dumps({
                     "type": "error", 
                     "message": "First message must be authentication"
-                }))
+                }, ensure_ascii=False))
                 return
             
             user_id = auth_data.get("user_id", "").strip()
             password = auth_data.get("password", "").strip()
             
             if not user_id or not password:
-                await websocket.send(json.dumps({"type": "auth_error", "message": "Missing credentials"}))
+                await websocket.send(json.dumps({
+                    "type": "auth_error", 
+                    "message": "Missing credentials"
+                }, ensure_ascii=False))
                 return
             
             if not await self.authenticate_user(websocket, user_id, password, client_ip):
                 await websocket.send(json.dumps({
                     "type": "auth_failed",
                     "message": "Invalid credentials"
-                }))
+                }, ensure_ascii=False))
                 return
             
             await websocket.send(json.dumps({
                 "type": "auth_success",
                 "message": f"Welcome {user_id}! Clipboard sync active."
-            }))
+            }, ensure_ascii=False))
             
             logger.info(f"User {user_id} connected. Total: {len(self.connected_clients)}")
             
@@ -162,28 +170,54 @@ class SimpleClipboardServer:
     
     async def handle_message(self, sender_websocket, message):
         try:
+            # Handle UTF-8 encoding properly
+            if isinstance(message, bytes):
+                message = message.decode('utf-8', errors='ignore')
+                
             data = json.loads(message)
             message_type = data.get("type")
             
-            if message_type == "clipboard_update":
-                clipboard_text = data.get("text", "").strip()
-                clipboard_image = data.get("image", "").strip()
-                
+            # Handle both old format (clipboard_update) and new format (clipboard_sync)
+            if message_type in ["clipboard_update", "clipboard_sync"]:
                 content_to_sync = None
                 content_type = None
                 
-                if clipboard_image and self._is_image_data(clipboard_image):
-                    if self._validate_input(clipboard_image):
-                        content_to_sync = clipboard_image
-                        content_type = "image"
-                elif clipboard_text:
-                    if self._validate_input(clipboard_text):
-                        content_to_sync = clipboard_text
-                        content_type = "text"
+                # New format from GUI client
+                if message_type == "clipboard_sync":
+                    content_type = data.get("content_type", "text")
+                    content_to_sync = data.get("content", "")
+                    
+                # Old format from original client  
+                elif message_type == "clipboard_update":
+                    clipboard_text = data.get("text", "").strip()
+                    clipboard_image = data.get("image", "").strip()
+                    
+                    if clipboard_image and self._is_image_data(clipboard_image):
+                        if self._validate_input(clipboard_image):
+                            content_to_sync = clipboard_image
+                            content_type = "image"
+                    elif clipboard_text:
+                        if self._validate_input(clipboard_text):
+                            content_to_sync = clipboard_text
+                            content_type = "text"
                 
-                if not content_to_sync:
-                    if clipboard_text or clipboard_image:
-                        logger.warning("Rejected clipboard update: failed validation")
+                # Validate content
+                if not content_to_sync or not content_type:
+                    return
+                    
+                # Clean and validate UTF-8 encoding
+                try:
+                    if content_type == "text":
+                        content_to_sync = content_to_sync.encode('utf-8', errors='ignore').decode('utf-8')
+                        if not self._validate_input(content_to_sync):
+                            logger.warning("Rejected clipboard update: failed validation")
+                            return
+                    elif content_type == "image":
+                        if not self._is_image_data(content_to_sync) or not self._validate_input(content_to_sync):
+                            logger.warning("Rejected image update: failed validation")
+                            return
+                except UnicodeError as e:
+                    logger.error(f"Unicode encoding error: {e}")
                     return
                 
                 sender_user = self.connected_clients.get(sender_websocket, "Unknown")
@@ -193,22 +227,27 @@ class SimpleClipboardServer:
                 else:
                     logger.info(f"Text from {sender_user}: {len(content_to_sync)} chars")
                 
+                # Create broadcast message with proper UTF-8 encoding
                 broadcast_message = json.dumps({
                     "type": "clipboard_sync",
                     "content_type": content_type,
                     "text": content_to_sync if content_type == "text" else "",
                     "image": content_to_sync if content_type == "image" else "",
                     "from_user": sender_user
-                })
+                }, ensure_ascii=False)
                 
+                # Broadcast to all other clients
                 for client_websocket, user_id in list(self.connected_clients.items()):
                     if client_websocket != sender_websocket:
                         try:
                             await client_websocket.send(broadcast_message)
-                        except:
+                        except Exception as e:
+                            logger.warning(f"Failed to send to {user_id}: {e}")
                             if client_websocket in self.connected_clients:
                                 del self.connected_clients[client_websocket]
             
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
         except Exception as e:
             logger.error(f"Error handling message: {e}")
     

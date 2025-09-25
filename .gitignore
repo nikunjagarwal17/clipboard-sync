@@ -11,6 +11,10 @@ secrets.json
 config_local.py
 config_local.json
 
+# Test and Debug files
+*test*
+*debug*
+
 # User Authentication Data
 auth_users.json
 users.db
