@@ -1,6 +1,15 @@
 # 📋 Clipboard Sync - GUI Edition
 
-Instantly sync clipboards (text AND images) between computers with a beautiful, invisible GUI interface. Copy on one computer, paste on another - completely seamless!
+Instantly sync clipboards (text AND images) between computers with a beautiful, invisible GUI interface. Copy on one computer**🌐 Environment Variables** (Override .env file)
+```cmd
+set CLIPBOARD_USERS=admin:mypassword,user1:password1,user2:password2
+```
+
+**🔒 Benefits:**
+- Uses your existing .env file automatically
+- No code changes needed
+- Environment variables override .env file
+- Safe for version control completely seamless!
 
 ## ✨ Key Features
 
@@ -135,13 +144,53 @@ Edit `client/config.json`:
 4. Server GUI will show public URL automatically
 
 ### **Custom Users**
-Edit `server/server.py` user dictionary (lines 20-25):
+
+**🎯 Recommended: .env File** (Your existing format works!)
+Your existing `server/.env` format is supported:
+```env
+USER1_NAME=admin
+USER1_PASS=admin123
+USER2_NAME=user1  
+USER2_PASS=password123
+USER3_NAME=user2
+USER3_PASS=password456
+USER4_NAME=guest
+USER4_PASS=guest789
+```
+
+**🔧 Alternative .env Formats** (Also supported)
+```env
+# Option 1: Single variable with multiple users
+CLIPBOARD_USERS=admin:mypassword,user1:password1,user2:password2
+
+# Option 2: Individual user variables
+CLIPBOARD_USER_ADMIN=mypassword
+CLIPBOARD_USER_USER1=password1
+CLIPBOARD_USER_USER2=password2
+```
+
+**� Alternative: Environment Variables**
+```cmd
+set CLIPBOARD_USERS=admin:mypassword,user1:password1,user2:password2
+# or
+set CLIPBOARD_USER_ADMIN=mypassword
+set CLIPBOARD_USER_USER1=password1
+```
+
+**📝 Last Resort: Edit Code** (Less secure)
+Edit `server/server.py` user dictionary (fallback only):
 ```python
 self.users = {
     "your_username": "your_password",
     "another_user": "another_pass"
 }
 ```
+
+**🔒 Benefits:**
+- Passwords not stored in source code
+- Easy deployment without code changes
+- Environment variables override .env file
+- Safe for version control
 
 ## 🛡️ Security Features
 

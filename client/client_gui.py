@@ -566,9 +566,12 @@ class ClipboardClientGUI:
                             image.save(buffer, format='PNG')
                             image_b64 = base64.b64encode(buffer.getvalue()).decode()
                             
+                            # Format as data URI for server validation
+                            data_uri = f"data:image/png;base64,{image_b64}"
+                            
                             if log_capture:
                                 self.log_message(f"📸 Captured image: {width}x{height}, {bit_count}-bit")
-                            return image_b64
+                            return data_uri
                             
                         except Exception as e:
                             if log_capture:
@@ -598,8 +601,16 @@ class ClipboardClientGUI:
     def set_clipboard_image(self, image_data):
         """Set image to clipboard"""
         try:
+            # Handle data URI format or raw base64
+            if image_data.startswith("data:image/"):
+                # Extract base64 part from data URI
+                base64_part = image_data.split("base64,", 1)[1] if "base64," in image_data else image_data
+            else:
+                # Already in base64 format
+                base64_part = image_data
+                
             # Decode base64 image
-            image_bytes = base64.b64decode(image_data)
+            image_bytes = base64.b64decode(base64_part)
             image = Image.open(io.BytesIO(image_bytes))
             
             self.log_message(f"📥 Setting image to clipboard: {image.size[0]}x{image.size[1]}")

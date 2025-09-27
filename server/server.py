@@ -8,6 +8,7 @@ import websockets
 import json
 import logging
 import time
+import os
 from typing import Dict, Set
 from datetime import datetime, timedelta
 
@@ -17,12 +18,7 @@ logger = logging.getLogger(__name__)
 class SimpleClipboardServer:
     
     def __init__(self):
-        self.users = {
-            "admin": "admin123",
-            "user1": "user123", 
-            "user2": "pass123",
-            "guest": "guest123"
-        }
+        self.users = self._load_users_from_env()
         
         self.connected_clients: Dict[websockets.WebSocketServerProtocol, str] = {}
         
@@ -36,6 +32,101 @@ class SimpleClipboardServer:
         
         logger.info(f"Loaded {len(self.users)} users: {list(self.users.keys())}")
         logger.info("Security features enabled for internet access")
+    
+    def _load_users_from_env(self):
+        """Load users from .env file and environment variables"""
+        users = {}
+        env_vars = {}
+        
+        # Try to load from .env file first
+        env_file_path = os.path.join(os.path.dirname(__file__), '.env')
+        if os.path.exists(env_file_path):
+            try:
+                with open(env_file_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            key, value = line.split('=', 1)
+                            key = key.strip()
+                            value = value.strip().strip('"').strip("'")  # Remove quotes if present
+                            env_vars[key] = value
+                
+                # Handle CLIPBOARD_USERS format
+                if 'CLIPBOARD_USERS' in env_vars:
+                    try:
+                        for user_pair in env_vars['CLIPBOARD_USERS'].split(','):
+                            if ':' in user_pair:
+                                username, password = user_pair.strip().split(':', 1)
+                                if username and password:
+                                    users[username] = password
+                        logger.info(f"Loaded users from CLIPBOARD_USERS in .env file")
+                    except Exception as e:
+                        logger.error(f"Error parsing CLIPBOARD_USERS from .env: {e}")
+                
+                # Handle individual CLIPBOARD_USER_ variables
+                for key, value in env_vars.items():
+                    if key.startswith('CLIPBOARD_USER_') and value:
+                        username = key[15:].lower()  # Remove 'CLIPBOARD_USER_' prefix
+                        if username:
+                            users[username] = value
+                
+                # Handle existing format: USER1_NAME/USER1_PASS, USER2_NAME/USER2_PASS, etc.
+                user_names = {}
+                user_passwords = {}
+                
+                for key, value in env_vars.items():
+                    if key.endswith('_NAME') and value:
+                        user_id = key[:-5]  # Remove '_NAME' suffix
+                        user_names[user_id] = value
+                    elif key.endswith('_PASS') and value:
+                        user_id = key[:-5]  # Remove '_PASS' suffix  
+                        user_passwords[user_id] = value
+                
+                # Match names with passwords
+                for user_id in user_names:
+                    if user_id in user_passwords:
+                        username = user_names[user_id]
+                        password = user_passwords[user_id]
+                        users[username] = password
+                
+                if users:
+                    logger.info(f"Loaded {len(users)} users from .env file: {env_file_path}")
+                    
+            except Exception as e:
+                logger.error(f"Error reading .env file: {e}")
+        
+        # Also check system environment variables (these take precedence)
+        env_users = os.getenv('CLIPBOARD_USERS', '')
+        if env_users:
+            try:
+                for user_pair in env_users.split(','):
+                    if ':' in user_pair:
+                        username, password = user_pair.strip().split(':', 1)
+                        if username and password:
+                            users[username] = password
+                logger.info(f"Loaded users from CLIPBOARD_USERS environment variable")
+            except Exception as e:
+                logger.error(f"Error parsing CLIPBOARD_USERS: {e}")
+        
+        # Check for individual environment variables (CLIPBOARD_USER_<username>=password)
+        for key, value in os.environ.items():
+            if key.startswith('CLIPBOARD_USER_') and value:
+                username = key[15:].lower()  # Remove 'CLIPBOARD_USER_' prefix
+                if username:
+                    users[username] = value
+        
+        # Fallback to default users if no users found
+        if not users:
+            users = {
+                "admin": "admin123",
+                "user1": "user123", 
+                "user2": "pass123",
+                "guest": "guest123"
+            }
+            logger.warning("No users found in .env file or environment variables, using default users")
+            logger.warning("Add users to your .env file using existing format or: CLIPBOARD_USERS='user1:pass1,user2:pass2'")
+        
+        return users
     
     def _is_rate_limited(self, client_ip: str) -> bool:
         """Check if client is rate limited"""
